@@ -530,3 +530,7 @@
 #authForm, #holidayForm {
     scroll-margin-top: 100px;
 }
+
+#userName {
+    font-size: 22px;
+}

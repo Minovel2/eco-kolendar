@@ -130,6 +130,24 @@ async function login() {
     }
 }
 
+async function importHolidays() {
+    if (!currentUser || currentUser.role !== 1) {
+        alert('Только администратор может импортировать праздники');
+        return;
+    }
+    
+    if (!confirm('Импортировать праздники из внешнего API? Это добавит новые международные праздники.')) return;
+    
+    try {
+        const response = await fetch(`${API_URL}/import/holidays`);
+        const data = await response.json();
+        alert(`✅ ${data.message}`);
+        loadHolidays(); // Перезагружаем список
+    } catch (error) {
+        alert('Ошибка импорта');
+    }
+}
+
 async function register() {
     const data = {
         last_name: document.getElementById('regLastName').value,

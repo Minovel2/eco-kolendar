@@ -1,3 +1,5 @@
+import httpx
+import json
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -5,7 +7,6 @@ from typing import Optional, List
 from app import models, schemas, crud
 from app.database import engine, get_db
 from app.seed import seed_database
-import json
 from app.models import User
 from app.schemas import UserRegister, UserLogin, UserResponse, HolidayUpdate
 
@@ -38,6 +39,53 @@ async def startup_event():
 async def root():
     return {"message": "Эко-календарь API работает!"}
 
+@app.get("/api/import/holidays")
+async def import_holidays(db: Session = Depends(get_db)):
+    """Импорт праздников из внешнего API (пример с Calendarific или открытым API)"""
+    
+    # Используем бесплатный API с экологическими праздниками
+    # Это публичный JSON с праздниками ООН
+    url = "https://date.nager.at/api/v3/PublicHolidays/2026/RU"
+    
+    imported_count = 0
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            if response.status_code == 200:
+                holidays_data = response.json()
+                
+                for h in holidays_data:
+                    # Проверяем, нет ли уже такого праздника
+                    existing = db.query(models.Holiday).filter(
+                        models.Holiday.name == h['localName'],
+                        models.Holiday.month == int(h['date'].split('-')[1]) - 1,
+                        models.Holiday.day == int(h['date'].split('-')[2])
+                    ).first()
+                    
+                    if not existing:
+                        date_parts = h['date'].split('-')
+                        new_holiday = models.Holiday(
+                            name=h['localName'],
+                            day=int(date_parts[2]),
+                            month=int(date_parts[1]) - 1,  # 0-indexed
+                            type="world",
+                            region="world",
+                            description=f"Государственный праздник: {h['name']}. Тип: {', '.join(h.get('types', []))}",
+                            events=json.dumps([]),
+                            wikipedia_url=""
+                        )
+                        db.add(new_holiday)
+                        imported_count += 1
+                
+                db.commit()
+        
+        return {
+            "message": f"Импортировано {imported_count} новых праздников",
+            "count": imported_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка импорта: {str(e)}")
+
 @app.get("/api/holidays", response_model=List[schemas.HolidayResponse])
 async def get_holidays(
     type: Optional[str] = None,
@@ -65,31 +113,6 @@ async def get_holidays(
             "wikipedia_url": h.wikipedia_url or ""
         })
     return result
-
-@app.post("/api/holidays", response_model=schemas.HolidayResponse)
-async def create_holiday(
-    holiday: schemas.HolidayCreate,
-    user_id: int = None,
-    db: Session = Depends(get_db)
-):
-    """Добавить новый праздник"""
-    # Временно без проверки админа (добавим позже)
-    db_holiday = crud.create_holiday(db=db, holiday=holiday)
-    try:
-        events = json.loads(db_holiday.events) if db_holiday.events else []
-    except:
-        events = []
-    return {
-        "id": db_holiday.id,
-        "name": db_holiday.name,
-        "day": db_holiday.day,
-        "month": db_holiday.month,
-        "type": db_holiday.type,
-        "region": db_holiday.region,
-        "description": db_holiday.description,
-        "events": events,
-        "wikipedia_url": db_holiday.wikipedia_url or ""
-    }
 
 @app.get("/api/holidays/{holiday_id}", response_model=schemas.HolidayResponse)
 async def get_holiday(
@@ -128,6 +151,31 @@ async def delete_holiday(
     if not success:
         raise HTTPException(status_code=404, detail="Праздник не найден")
     return {"message": "Праздник удалён"}
+
+@app.post("/api/holidays", response_model=schemas.HolidayResponse)
+async def create_holiday(
+    holiday: schemas.HolidayCreate,
+    user_id: int = None,
+    db: Session = Depends(get_db)
+):
+    """Добавить новый праздник"""
+    # Временно без проверки админа (добавим позже)
+    db_holiday = crud.create_holiday(db=db, holiday=holiday)
+    try:
+        events = json.loads(db_holiday.events) if db_holiday.events else []
+    except:
+        events = []
+    return {
+        "id": db_holiday.id,
+        "name": db_holiday.name,
+        "day": db_holiday.day,
+        "month": db_holiday.month,
+        "type": db_holiday.type,
+        "region": db_holiday.region,
+        "description": db_holiday.description,
+        "events": events,
+        "wikipedia_url": db_holiday.wikipedia_url or ""
+    }
 
 @app.post("/api/register", response_model=UserResponse)
 async def register(user_data: UserRegister, db: Session = Depends(get_db)):
